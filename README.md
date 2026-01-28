@@ -1,10 +1,14 @@
 # Bingo Board – Goal Bingo Game
 
-**[Repository](https://github.com/jaymie-b-ecoben/Bingo-Board)** · A modern, full-featured bingo board for personal goals. Add your goals, generate a card, and mark tiles as you complete them. Complete a row, column, or diagonal to score a Bingo.
+A modern, full-featured bingo board for personal goals. Add your goals, generate a card, and mark tiles as you complete them. Complete a row, column, or diagonal to score a Bingo. **Feel free to play it online** — I’ve made it live on GitHub Pages.
 
 ![HTML5](https://img.shields.io/badge/HTML5-E34F26?style=for-the-badge&logo=html5&logoColor=white)
 ![CSS3](https://img.shields.io/badge/CSS3-1572B6?style=for-the-badge&logo=css3&logoColor=white)
 ![JavaScript](https://img.shields.io/badge/JavaScript-F7DF1E?style=for-the-badge&logo=javascript&logoColor=black)
+
+**[▶ Live demo](https://jaymie-b-ecoben.github.io/Bingo-Board/)** · **[📂 Repository](https://github.com/jaymie-b-ecoben/Bingo-Board)**
+
+Special thanks to **Gillian** for the ideas. ദ്ദി◝ ⩊ ◜.ᐟ
 
 ## Table of Contents
 
@@ -16,7 +20,7 @@
 - [Technologies Used](#technologies-used)
 - [Documentation](#documentation)
 - [About the Developer](#about-the-developer)
-- [Contributing](#contributing)
+- [Contribute & Collaborate](#contribute--collaborate)
 - [License](#license)
 
 ## About
@@ -38,6 +42,8 @@ No server or database required — everything is stored in the browser (localSto
 - **Responsive design** — Works on desktop and mobile. No build step.
 
 ## How to Play
+
+**Try it online:** [Live demo](https://jaymie-b-ecoben.github.io/Bingo-Board/) — Feel free to play in your browser — no installation needed.
 
 1. **Goal pool** — Add your goals (one per line) in the text area, or click **Use sample** to fill with example goals.
 2. **Settings** — Choose board size (3×3, 4×4, or 5×5), win condition (1 Bingo, 2 Bingos, etc., or Blackout), and whether to use a center “Free” space.
@@ -98,12 +104,13 @@ No frameworks, no build step. Data is stored in the browser (localStorage).
 
 ## About the Developer
 
-Developed with ♥ by **Jaymie**.
+Developed with ♥ by **[Jaymie Ecoben](https://github.com/jaymie-b-ecoben)**.
 
-## Contributing
+## Contribute & Collaborate
 
-Open an [issue](https://github.com/jaymie-b-ecoben/Bingo-Board/issues) or submit a [pull request](https://github.com/jaymie-b-ecoben/Bingo-Board/pulls) on [GitHub](https://github.com/jaymie-b-ecoben/Bingo-Board).
+- **Bug or issue?** Open an [issue](https://github.com/jaymie-b-ecoben/Bingo-Board/issues) on the Bingo Board repo.
+- **Want to collaborate?** Open a [pull request](https://github.com/jaymie-b-ecoben/Bingo-Board/pulls) or reach out via [GitHub](https://github.com/jaymie-b-ecoben).
 
 ## License
 
-This project is open source. Use and modify as you like. Developed with ♥ by Jaymie.
+This project is open source. Use and modify as you like.

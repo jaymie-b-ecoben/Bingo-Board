@@ -96,6 +96,13 @@
       image-rendering:pixelated;
       image-rendering:crisp-edges;
     }
+    .app-footer a{
+      color:#5a4dff;
+      text-decoration:none;
+    }
+    .app-footer a:hover{
+      text-decoration:underline;
+    }
 
     .hud{
       display:flex;

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <defs>
+    <linearGradient id="star" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#ffd93d"/>
+      <stop offset="100%" style="stop-color:#f9a602"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#star)" stroke="#e69500" stroke-width="1" d="M16 2l4 10 10 2-7 7 2 10-9-5-9 5 2-10-7-7 10-2z"/>
+</svg>
