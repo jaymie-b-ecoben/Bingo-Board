@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Bingo Board</title>
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+
+<body>
+
+  <canvas id="bg"></canvas>
+  <canvas id="fg"></canvas>
+  <div class="vignette"></div>
+
+  <div class="wrap">
+    <div class="panel">
+      <h1>Bingo Board</h1>
+      <div class="subtitle">Make progress, one square at a time(｡•̀ᴗ-)✧</div>
+
+      <!-- START / SETUP -->
+      <section id="screenStart">
+        <div class="hud">
+          <div class="hud-left">
+            <div class="stat"><span class="dot"></span> Bingos: <span id="statBingos">0</span></div>
+            <div class="stat"><span class="dot" style="background:#ffce00"></span> Score: <span id="statScore">0</span>
+            </div>
+          </div>
+          <div class="hud-right buttons">
+            <button class="btn secondary" id="btnSound">Sound: On</button>
+            <button class="btn ghost" id="btnMusic">🎵 Music</button>
+            <button class="btn ghost" id="btnHelp">Help</button>
+          </div>
+        </div>
+
+        <div class="setup-grid">
+          <div class="setup-card">
+            <label>Board size</label>
+            <select id="sizeSelect" class="field">
+              <option value="3">3 × 3</option>
+              <option value="4">4 × 4</option>
+              <option value="5" selected>5 × 5</option>
+              <option value="6">6 × 6</option>
+              <option value="7">7 × 7</option>
+            </select>
+            <div style="margin-top:8px; font-size:11px; color:#666;">Default includes a center "Free" space.</div>
+          </div>
+
+          <div class="setup-card">
+            <label>Win condition</label>
+            <select id="winSelect" class="field">
+              <option value="1" selected>1 Bingo</option>
+              <option value="2">2 Bingos</option>
+              <option value="3">3 Bingos</option>
+              <option value="5">5 Bingos</option>
+              <option value="blackout">Blackout (all marked)</option>
+            </select>
+            <label style="margin-top:8px; display:flex; align-items:center; gap:6px; font-size:12px;">
+              <input id="freeToggle" type="checkbox" checked style="width:16px; height:16px;" />
+              <span>Center "Free" space</span>
+            </label>
+          </div>
+
+          <div class="setup-card">
+            <label>Progress</label>
+            <div style="display:flex; gap:8px; flex-direction:column;">
+              <button id="btnContinue" class="btn ghost" style="width:100%;">Continue last</button>
+              <button id="btnNew" class="btn ghost" style="width:100%;">Fresh start</button>
+              <button id="btnSaveSlot" class="btn ghost" style="width:100%;">Save to slot</button>
+            </div>
+            <div style="margin-top:8px; font-size:11px; color:#666;">Saved automatically.</div>
+            <div style="margin-top:10px; font-weight:700; font-size:12px;">Saved slots</div>
+            <div id="slotsList" class="slots-list"></div>
+          </div>
+        </div>
+
+        <div class="setup-card" style="margin-bottom:16px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+            <label>Goal pool</label>
+            <div style="display:flex; gap:6px; flex-wrap:wrap;">
+              <button id="btnFillSample" class="btn ghost" style="padding:6px 10px; font-size:12px;">Use sample</button>
+              <button id="btnSavePool" class="btn ghost" style="padding:6px 10px; font-size:12px;">Save pool</button>
+              <button id="btnLoadPool" class="btn ghost" style="padding:6px 10px; font-size:12px;">Load pool</button>
+              <button id="btnClearGoals" class="btn ghost" style="padding:6px 10px; font-size:12px;">Clear</button>
+            </div>
+          </div>
+          <textarea id="goalsInput" class="field" placeholder="Example:
+Read 20 pages
+Workout 30 minutes
+Drink 2L water
+Journal 5 minutes
+Practice a language
+Declutter one drawer"></textarea>
+          <div
+            style="margin-top:12px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+            <div style="font-size:11px; color:#666;">Quick: Tap mark, Hold edit, R reset.</div>
+            <div style="display:flex; gap:8px;">
+              <button id="btnGenerate" class="btn secondary" style="padding:8px 12px;">Generate</button>
+              <button id="btnStart" class="btn" style="padding:8px 12px;">Start</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="setup-card">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+            <label>👀 Preview</label>
+            <span style="font-size:12px; font-weight:700;"><span id="previewCount">0</span> tiles</span>
+          </div>
+          <div id="previewGrid" class="preview-grid" style="grid-template-columns: repeat(5, 1fr);">
+            <!-- preview cells -->
+          </div>
+          <div style="margin-top:12px; display:flex; gap:8px; justify-content:space-between; flex-wrap:wrap;">
+            <button id="btnImport" class="btn ghost" style="padding:6px 10px; font-size:12px;">📥 Import</button>
+            <button id="btnExport" class="btn ghost" style="padding:6px 10px; font-size:12px;">📤 Export</button>
+            <button id="btnCopyShare" class="btn ghost" style="padding:6px 10px; font-size:12px;">Share link</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- GAMEPLAY -->
+      <section id="screenPlay" class="hidden">
+        <div class="hud">
+          <div class="hud-left">
+            <div class="stat"><span class="dot"></span> Marked: <span id="statMarked">0</span>/<span
+                id="statTotal">25</span></div>
+            <div class="stat"><span class="dot"></span> Bingos: <span id="statBingosPlay">0</span></div>
+            <div class="stat"><span class="dot" style="background:#ffce00"></span> Score: <span
+                id="statScorePlay">0</span></div>
+            <div class="stat"><span class="dot" style="background:#2ecc71"></span> Best: <span id="statBest">0</span>
+            </div>
+            <div class="stat"><span class="dot" style="background:#3498db"></span> Time: <span id="statTime">0:00</span>
+            </div>
+          </div>
+          <div class="hud-right buttons">
+            <button id="btnEditMode" class="btn ghost">Edit: Off</button>
+            <button id="btnShuffleUnmarked" class="btn ghost">Shuffle</button>
+            <button id="btnResetMarks" class="btn secondary">Reset</button>
+            <button id="btnBackToSetup" class="btn ghost">Setup</button>
+          </div>
+        </div>
+
+        <div id="board" class="board"></div>
+
+        <div class="status" id="status">
+          <div style="font-size:12px; color:#666;">
+            🎯 Win goal: <b id="winGoalLabel" style="color:#222;">1 Bingo</b> · Long-press to edit.
+          </div>
+        </div>
+      </section>
+
+      <!-- GAME OVER -->
+      <section id="screenOver" class="hidden">
+        <div class="bingo-card">
+          <div class="coin-pile">🪙🪙🪙</div>
+          <div class="bingo-title" id="overTitle">BINGO!</div>
+          <div class="bingo-sub" id="overSubtitle">You hit your win condition.</div>
+          <div class="buttons" style="justify-content:center; margin-top:16px; gap:10px; flex-wrap:wrap;">
+            <button class="btn" id="btnKeepPlaying">Keep Playing</button>
+            <button class="btn secondary" id="btnNewRound">New Board</button>
+            <button class="btn ghost" id="btnOverSetup">Back to Setup</button>
+          </div>
+        </div>
+      </section>
+      <footer class="app-footer">Developed with ♥ by Jaymie</footer>
+    </div>
+  </div>
+
+  <!-- MODALS -->
+  <div id="modalHost" class="hidden"></div>
+
+  <!-- Music Player -->
+  <div id="musicPlayer" class="music-player collapsed">
+    <div class="music-header">
+      <div class="music-title"><span id="musicTitleIcon">🎵</span><span id="musicTitleText"> Cozy Tunes</span></div>
+      <button class="music-toggle" id="musicToggle">▼</button>
+    </div>
+    <div class="music-content">
+      <!-- Expanded view -->
+      <div class="music-now-playing">
+        <div class="music-artwork" id="musicArtwork">🎵</div>
+        <div class="music-info">
+          <div class="music-song-name" id="musicSongName">Select a song</div>
+          <div class="music-artist" id="musicArtist">—</div>
+        </div>
+        <div class="music-controls">
+          <button class="music-btn" id="musicPrev">⏮</button>
+          <button class="music-btn play" id="musicPlay">▶</button>
+          <button class="music-btn" id="musicNext">⏭</button>
+        </div>
+      </div>
+      <div class="music-progress">
+        <div class="music-progress-bar" id="musicProgress"></div>
+      </div>
+      <div class="music-add-section">
+        <div style="font-weight:900; font-size:12px; margin-bottom:6px;">Add Music</div>
+        <div class="music-add-buttons">
+          <button class="music-add-btn upload" id="musicUploadBtn">Upload MP3</button>
+          <button class="music-add-btn youtube" id="musicYoutubeBtn">YouTube</button>
+        </div>
+        <input type="file" id="musicFileInput" class="music-file-input" accept="audio/*,.mp3" />
+      </div>
+      <div class="music-playlist" id="musicPlaylist">
+        <!-- Songs will be added here -->
+      </div>
+    </div>
+  </div>
+
+  <script src="js/background.js"></script>
+  <script src="js/game.js"></script>
+  <script src="js/music-player.js"></script>
+</body>
+
+</html>
