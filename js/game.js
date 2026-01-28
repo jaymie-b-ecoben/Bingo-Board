@@ -97,7 +97,7 @@
   const STORAGE_KEY = "goal_bingo_v1";
   const BEST_KEY = "goal_bingo_best_v1";
   const GOAL_POOLS_KEY = "goal_bingo_pools_v1";
-  const SLOTS_KEY = "goal_bingo_slots_v1";
+  const SAVED_CARD_KEY = "goal_bingo_saved_card_v1";
 
   const state = {
     screen: "start", // start | play | over
@@ -109,9 +109,21 @@
     startedAt: 0,
     score: 0,
     bingos: 0,
-    editMode: false,
     lastBingoLinesKey: "",
-    won: false
+    won: false,
+    timerPaused: false,
+    pausedAt: 0,
+    accumulatedPauseMs: 0,
+    elapsedMsAtWin: 0,
+    keepPlayingDismissed: false,
+    strikesLeft: 3
+  };
+
+  const STRIKES_MAX = 3;
+  const STRIKE_PENALTIES = {
+    edit: 15,
+    skip: 10,
+    replace: 20
   };
 
   function defaultSampleGoals() {
@@ -188,6 +200,13 @@
   }
 
   // ---------- Persistence / Share ----------
+  function hasSavedGame() {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return false;
+    const data = safeJSONParse(raw);
+    return !!(data && Array.isArray(data.board) && data.board.length > 0);
+  }
+
   function save() {
     const payload = {
       size: state.size,
@@ -199,9 +218,181 @@
       score: state.score,
       bingos: state.bingos,
       won: state.won,
-      lastBingoLinesKey: state.lastBingoLinesKey
+      lastBingoLinesKey: state.lastBingoLinesKey,
+      timerPaused: state.timerPaused,
+      pausedAt: state.pausedAt,
+      accumulatedPauseMs: state.accumulatedPauseMs,
+      strikesLeft: state.strikesLeft
     };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+    const savedEl = $("#savedAutomaticallyText");
+    if (savedEl) savedEl.classList.remove("hidden");
+  }
+
+  function getElapsedMs() {
+    if (!state.startedAt) return 0;
+    let elapsed = Date.now() - state.startedAt - state.accumulatedPauseMs;
+    if (state.timerPaused && state.pausedAt) {
+      elapsed -= (Date.now() - state.pausedAt);
+    }
+    return Math.max(0, elapsed);
+  }
+
+  function getSavedCards() {
+    const raw = localStorage.getItem(SAVED_CARD_KEY);
+    const data = safeJSONParse(raw);
+    if (Array.isArray(data)) return data;
+    if (data && data.board && Array.isArray(data.board)) {
+      return [{ ...data, name: data.name || "Saved card", id: data.id || "c_old" }];
+    }
+    return [];
+  }
+
+  function saveCurrentCard(name) {
+    const timeMs = (state.won && state.elapsedMsAtWin != null) ? state.elapsedMsAtWin : getElapsedMs();
+    const cards = getSavedCards();
+    const payload = {
+      id: "c_" + Date.now(),
+      name: (name || "Bingo card").trim() || "Bingo card",
+      savedAt: Date.now(),
+      size: state.size,
+      free: state.free,
+      win: state.win,
+      board: state.board.map(t => ({ ...t })),
+      score: state.score,
+      bingos: state.bingos,
+      timeMs,
+      marked: state.board.reduce((a, t) => a + (t.checked ? 1 : 0), 0),
+      total: state.board.length
+    };
+    cards.unshift(payload);
+    if (cards.length > 20) cards.length = 20;
+    localStorage.setItem(SAVED_CARD_KEY, JSON.stringify(cards));
+  }
+
+  function deleteSavedCard(id) {
+    const cards = getSavedCards().filter((c) => c.id !== id);
+    localStorage.setItem(SAVED_CARD_KEY, JSON.stringify(cards));
+  }
+
+  function openViewSavedCardModal() {
+    const cards = getSavedCards();
+    const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    const openDeleteSavedCardConfirm = (id, name) => {
+      const safeName = (name || "Saved card").trim() || "Saved card";
+      const safeNameEsc = esc(safeName);
+      openModal(`
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+          <div>
+            <div style="font-weight:900; font-size:18px;">🗑️ Delete saved card</div>
+            <div style="font-size:12px; color:#666;">This action can’t be undone.</div>
+          </div>
+          <button id="delSavedCancelX" class="btn ghost">Close</button>
+        </div>
+        <div class="setup-card" style="margin:0;">
+          <div style="font-weight:800; margin-bottom:6px;">Delete “${safeNameEsc}”?</div>
+          <div style="font-size:12px; color:#666;">You’ll permanently remove this saved slot from this device.</div>
+        </div>
+        <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:12px; flex-wrap:wrap;">
+          <button id="delSavedCancel" class="btn ghost">Cancel</button>
+          <button id="delSavedConfirm" class="btn" style="background:var(--ui-bad); border-color:var(--ui-bad);">Delete</button>
+        </div>
+      `);
+      $("#delSavedCancelX").onclick = () => { closeModal(); openViewSavedCardModal(); };
+      $("#delSavedCancel").onclick = () => { closeModal(); openViewSavedCardModal(); AudioSys.click(220, 0.05, "sine", 0.04); };
+      $("#delSavedConfirm").onclick = () => {
+        deleteSavedCard(id);
+        closeModal();
+        openViewSavedCardModal();
+        AudioSys.click(220, 0.06, "triangle", 0.05);
+      };
+    };
+    if (!cards.length) {
+      openModal(`
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+          <div style="font-weight:900; font-size:18px;">📋 Saved bingo cards</div>
+          <button id="savedCardClose" class="btn ghost">Close</button>
+        </div>
+        <div class="setup-card" style="margin:0;">
+          <div style="font-weight:700; color:#555;">No saved cards yet.</div>
+          <div style="font-size:12px; color:#666; margin-top:6px;">After you finish a game, use <strong>Save Card</strong> on the game over screen and give it a name.</div>
+        </div>
+      `);
+      $("#savedCardClose").onclick = closeModal;
+      return;
+    }
+    let listHtml = "";
+    for (const saved of cards) {
+      const date = new Date(saved.savedAt);
+      const dateStr = date.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit" });
+      const timeStr = formatTime(saved.timeMs || 0);
+      const size = saved.size || 5;
+      const total = saved.total ?? size * size;
+      let gridHtml = "";
+      for (let i = 0; i < (saved.board || []).length; i++) {
+        const t = saved.board[i];
+        const txt = esc(t?.text || "-");
+        const done = t?.checked ? " done" : "";
+        const free = t?.free ? " free" : "";
+        gridHtml += `<div class="preview-cell${done}${free}" style="min-height:36px; font-size:11px;">${txt}</div>`;
+      }
+      const cardName = esc(saved.name || "Bingo card");
+      const cardId = saved.id || "";
+      listHtml += `
+        <div class="saved-card-item" data-id="${esc(cardId)}">
+          <button type="button" class="saved-card-header" aria-expanded="false">
+            <span class="saved-card-name">${cardName}</span>
+            <span class="saved-card-date">${dateStr}</span>
+            <span class="saved-card-toggle">▼</span>
+          </button>
+          <div class="saved-card-details" hidden>
+            <div class="saved-card-meta">
+              <div class="saved-card-meta-left">
+                <span>Score: ${saved.score ?? 0}</span>
+                <span>Bingos: ${saved.bingos ?? 0}</span>
+                <span>Time: ${timeStr}</span>
+                <span>Marked: ${saved.marked ?? 0}/${total}</span>
+              </div>
+              <button
+                type="button"
+                class="saved-card-delete-btn"
+                data-id="${esc(cardId)}"
+                data-name="${cardName}"
+                title="Delete saved card"
+                aria-label="Delete saved card"
+              >🗑️</button>
+            </div>
+            <div class="preview-grid saved-card-grid" style="grid-template-columns: repeat(${size}, 1fr); gap:4px; padding:8px;">${gridHtml}</div>
+          </div>
+        </div>`;
+    }
+    openModal(`
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+        <div style="font-weight:900; font-size:18px;">📋 Saved bingo cards</div>
+        <button id="savedCardClose" class="btn ghost">Close</button>
+      </div>
+      <div id="savedCardsList" class="saved-cards-list">${listHtml}</div>
+    `);
+    $("#savedCardClose").onclick = closeModal;
+    const host = $("#modalHost");
+    host.querySelectorAll(".saved-card-header").forEach((btn) => {
+      btn.onclick = () => {
+        const item = btn.closest(".saved-card-item");
+        const details = item && item.querySelector(".saved-card-details");
+        const isExpanded = details && !details.hidden;
+        if (details) details.hidden = isExpanded;
+        if (btn) btn.setAttribute("aria-expanded", isExpanded ? "false" : "true");
+        const toggle = btn.querySelector(".saved-card-toggle");
+        if (toggle) toggle.textContent = isExpanded ? "▼" : "▲";
+      };
+    });
+    host.querySelectorAll(".saved-card-delete-btn").forEach((btn) => {
+      btn.onclick = () => {
+        const id = btn.getAttribute("data-id");
+        const name = btn.getAttribute("data-name") || "Saved card";
+        openDeleteSavedCardConfirm(id, name);
+      };
+    });
   }
 
   function load() {
@@ -210,7 +401,7 @@
     const data = safeJSONParse(raw);
     if (!data || !Array.isArray(data.board)) return false;
     Object.assign(state, {
-      size: clamp(+data.size || 5, 3, 7),
+      size: clamp(+data.size || 5, 3, 5),
       free: !!data.free,
       win: (data.win ?? "1") + "",
       goalsPool: Array.isArray(data.goalsPool) ? data.goalsPool : [],
@@ -219,7 +410,11 @@
       score: +data.score || 0,
       bingos: +data.bingos || 0,
       won: !!data.won,
-      lastBingoLinesKey: data.lastBingoLinesKey || ""
+      lastBingoLinesKey: data.lastBingoLinesKey || "",
+      timerPaused: !!data.timerPaused,
+      pausedAt: +data.pausedAt || 0,
+      accumulatedPauseMs: +data.accumulatedPauseMs || 0,
+      strikesLeft: Number.isFinite(+data.strikesLeft) ? clamp(+data.strikesLeft, 0, STRIKES_MAX) : STRIKES_MAX
     });
     return true;
   }
@@ -258,138 +453,6 @@
   function deletePoolById(id) {
     let pools = getPools().filter(x => x.id !== id);
     localStorage.setItem(GOAL_POOLS_KEY, JSON.stringify(pools));
-  }
-
-  function getSlots() {
-    const raw = localStorage.getItem(SLOTS_KEY);
-    const data = safeJSONParse(raw);
-    return Array.isArray(data) ? data : [];
-  }
-  function saveSlot(title) {
-    const payload = {
-      size: state.size,
-      free: state.free,
-      win: state.win,
-      goalsPool: state.goalsPool.slice(),
-      board: state.board.map(t => ({ ...t })),
-      startedAt: state.startedAt,
-      score: state.score,
-      bingos: state.bingos,
-      won: state.won,
-      lastBingoLinesKey: state.lastBingoLinesKey
-    };
-    const slots = getSlots();
-    const id = "s_" + Date.now();
-    const savedAt = Date.now();
-    const displayTitle = (title && String(title).trim()) || formatSlotDate(savedAt);
-    slots.unshift({ id, savedAt, title: displayTitle, payload });
-    if (slots.length > 20) slots.length = 20;
-    localStorage.setItem(SLOTS_KEY, JSON.stringify(slots));
-    renderSlotsList();
-  }
-  function getSlotTitle(slot) {
-    return (slot && (slot.title || formatSlotDate(slot.savedAt))) || "Saved game";
-  }
-  function loadSlotById(id) {
-    const slots = getSlots();
-    const s = slots.find(x => x.id === id);
-    if (!s || !s.payload) return false;
-    const d = s.payload;
-    state.size = clamp(+d.size || 5, 3, 7);
-    state.free = !!d.free;
-    state.win = (d.win ?? "1") + "";
-    state.goalsPool = Array.isArray(d.goalsPool) ? d.goalsPool : [];
-    state.board = Array.isArray(d.board) ? d.board : [];
-    state.startedAt = +d.startedAt || 0;
-    state.score = +d.score || 0;
-    state.bingos = +d.bingos || 0;
-    state.won = !!d.won;
-    state.lastBingoLinesKey = d.lastBingoLinesKey || "";
-    syncSetupControls();
-    renderPreview();
-    save();
-    return true;
-  }
-  function deleteSlotById(id) {
-    let slots = getSlots().filter(x => x.id !== id);
-    localStorage.setItem(SLOTS_KEY, JSON.stringify(slots));
-    renderSlotsList();
-  }
-  function formatSlotDate(ts) {
-    const d = new Date(ts);
-    const date = d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
-    const time = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-    return date + " " + time;
-  }
-  function renderSlotsList() {
-    const el = $("#slotsList");
-    if (!el) return;
-    const slots = getSlots();
-    if (!slots.length) {
-      el.innerHTML = "<div class=\"slot-empty-guide\">No saved slots yet. During or after a game, click <strong>Save to slot</strong> to save this board and progress. Load a slot below to continue that game.</div>";
-      return;
-    }
-    const esc = (str) => String(str).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
-    el.innerHTML = slots.map(s => {
-      const marked = (s.payload && s.payload.board) ? s.payload.board.filter(t => t.checked).length : 0;
-      const total = (s.payload && s.payload.board) ? s.payload.board.length : 0;
-      const bingos = (s.payload && s.payload.bingos) || 0;
-      const size = (s.payload && s.payload.size) || 5;
-      const detail = size + "x" + size + " · " + marked + "/" + total + " marked · " + bingos + " bingo" + (bingos !== 1 ? "s" : "");
-      const slotTitle = getSlotTitle(s);
-      return `
-        <div class="slot-item" data-slot-id="${s.id}" data-slot-title="${esc(slotTitle)}">
-          <div class="slot-item-info">
-            <div class="slot-item-date">${esc(slotTitle)}</div>
-            <div class="slot-item-detail">${formatSlotDate(s.savedAt)} · ${detail}</div>
-          </div>
-          <div class="slot-item-actions">
-            <button class="btn ghost slot-load" data-id="${s.id}">Load</button>
-            <button class="btn ghost slot-delete" data-id="${s.id}" data-title="${esc(slotTitle)}">Delete</button>
-          </div>
-        </div>`;
-    }).join("");
-    el.querySelectorAll(".slot-load").forEach(btn => {
-      btn.onclick = () => {
-        const id = btn.dataset.id;
-        const slot = getSlots().find(x => x.id === id);
-        const title = getSlotTitle(slot);
-        if (loadSlotById(id)) {
-          startGameplay();
-          AudioSys.success();
-          showToast("Loaded: " + title + ". Resuming game.");
-        }
-      };
-    });
-    el.querySelectorAll(".slot-delete").forEach(btn => {
-      btn.onclick = (e) => {
-        e.stopPropagation();
-        const id = btn.dataset.id;
-        const rawTitle = (btn.dataset.title || "this slot").replace(/&quot;/g, '"');
-        const safeTitle = String(rawTitle).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
-        openModal(`
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-            <div style="font-weight:900; font-size:18px;">Delete slot?</div>
-            <button id="slotDelClose" class="btn ghost">Cancel</button>
-          </div>
-          <div class="setup-card" style="margin:0 0 12px 0;">
-            <div style="font-weight:700; margin-bottom:6px;">"${safeTitle}"</div>
-            <div style="font-size:13px; color:#555;">This cannot be undone.</div>
-          </div>
-          <div style="display:flex; gap:8px; justify-content:flex-end;">
-            <button id="slotDelCancel" class="btn ghost">Cancel</button>
-            <button id="slotDelConfirm" class="btn" style="background:linear-gradient(#ff5c5c,#ff3d3d); border-color:#5a1a1a;">Delete</button>
-          </div>
-        `);
-        $("#slotDelClose").onclick = closeModal;
-        $("#slotDelCancel").onclick = closeModal;
-        $("#slotDelConfirm").onclick = () => {
-          deleteSlotById(id);
-          closeModal();
-          AudioSys.click(220, 0.05, "sine", 0.04);
-        };
-      };
-    });
   }
 
   function encodeShare() {
@@ -441,7 +504,7 @@
     let pool = state.goalsPool.slice();
     shuffle(pool);
 
-    const board = new Array(total).fill(null).map(() => ({ text: "", checked: false, free: false }));
+    const board = new Array(total).fill(null).map(() => ({ text: "", checked: false, free: false, skipped: false }));
     const center = Math.floor(total / 2);
 
     let needs = total;
@@ -455,14 +518,15 @@
     let idx = 0;
     for (let i = 0; i < total; i++) {
       if (state.free && (size % 2 === 1) && i === center) {
-        board[i] = { text: "Free", checked: true, free: true };
+        board[i] = { text: "Free", checked: true, free: true, skipped: false };
       } else {
-        board[i] = { text: picked[idx++] || "Your goal here", checked: false, free: false };
+        board[i] = { text: picked[idx++] || "Your goal here", checked: false, free: false, skipped: false };
       }
     }
 
     state.board = board;
     state.score = 0;
+    state.strikesLeft = STRIKES_MAX;
     state.bingos = countBingos(state.board, state.size).bingos;
     state.startedAt = 0;
     state.won = false;
@@ -496,36 +560,73 @@
     $("#screenStart").classList.toggle("hidden", which !== "start");
     $("#screenPlay").classList.toggle("hidden", which !== "play");
     $("#screenOver").classList.toggle("hidden", which !== "over");
-    if (which === "start") renderSlotsList();
+    document.body.classList.toggle("screen-play", which === "play");
   }
 
   function renderPreview() {
     const size = state.size;
+    const total = size * size;
     const grid = $("#previewGrid");
+    const emptyEl = $("#previewEmpty");
+    const poolEmpty = !state.goalsPool || state.goalsPool.length === 0;
+    const hasGenerated = state.board && state.board.length === total;
+
+    if (emptyEl) {
+      const shouldShowEmpty = poolEmpty || !hasGenerated;
+      emptyEl.classList.toggle("hidden", !shouldShowEmpty);
+      emptyEl.textContent = poolEmpty ? "No goals yet — add some above!" : "Kindly generate your card first.";
+    }
+    if (grid) grid.classList.toggle("hidden", poolEmpty || !hasGenerated);
+
     grid.style.gridTemplateColumns = `repeat(${size}, minmax(0,1fr))`;
     grid.innerHTML = "";
-
-    const total = size * size;
     $("#previewCount").textContent = total;
 
-    const center = Math.floor(total / 2);
-    for (let i = 0; i < total; i++) {
-      const d = document.createElement("div");
-      d.className = "preview-cell";
-      let txt = state.board[i]?.text || "";
-      if (!txt) {
-        if (state.free && (size % 2 === 1) && i === center) txt = "Free";
-        else txt = "-";
+    if (!poolEmpty && hasGenerated) {
+      const showGoals = $("#previewShowGoals") && $("#previewShowGoals").checked;
+      const center = Math.floor(total / 2);
+      for (let i = 0; i < total; i++) {
+        const d = document.createElement("div");
+        d.className = "preview-cell";
+        const isFree = state.free && (size % 2 === 1) && i === center;
+        let txt;
+        if (isFree) {
+          txt = "Free";
+        } else if (!showGoals) {
+          txt = "-";
+        } else {
+          txt = state.board[i]?.text || "-";
+        }
+        d.textContent = txt;
+        if (isFree) d.classList.add("free");
+        grid.appendChild(d);
       }
-      d.textContent = txt;
-      if (state.free && (size % 2 === 1) && i === center) {
-        d.classList.add("free");
-      }
-      grid.appendChild(d);
     }
 
     $("#statTotal").textContent = total;
     $("#winGoalLabel").textContent = state.win === "blackout" ? "Blackout" : `${state.win} Bingo${state.win === "1" ? "" : "s"}`;
+    updateSetupButtonStates();
+  }
+
+  function updateSetupButtonStates() {
+    const startBtn = $("#btnStart");
+    const goalsHint = $("#goalsHint");
+    const goalsCounter = $("#goalsCounter");
+    const poolCount = state.goalsPool ? state.goalsPool.length : 0;
+    const total = state.size * state.size;
+    const needs = total - (state.free && (state.size % 2 === 1) ? 1 : 0);
+    const hasGenerated = state.board && state.board.length === total;
+    if (goalsCounter) goalsCounter.textContent = `Goals: ${poolCount}/${needs}`;
+    if (startBtn) startBtn.disabled = (poolCount < needs) || !hasGenerated;
+    if (goalsHint) {
+      goalsHint.classList.toggle("hidden", poolCount >= needs);
+      const remaining = Math.max(0, needs - poolCount);
+      goalsHint.textContent = remaining > 0
+        ? `Add ${remaining} more goal${remaining === 1 ? "" : "s"} to fill a ${state.size}×${state.size} board.`
+        : (!hasGenerated ? `Click Generate to preview your board before starting.` : `Ready to start!`);
+    }
+    const soundBtn = $("#btnSound");
+    if (soundBtn) soundBtn.classList.toggle("active", AudioSys.enabled);
   }
 
   function renderBoard() {
@@ -542,6 +643,7 @@
 
       if (tile.checked) cell.classList.add("done");
       if (tile.free) cell.classList.add("free");
+      if (tile.skipped) cell.classList.add("skipped");
 
       const text = document.createElement("div");
       text.className = "cellText";
@@ -570,8 +672,55 @@
     $("#statBingos").textContent = state.bingos;
     $("#statBingosPlay").textContent = state.bingos;
     $("#statBest").textContent = bestScoreGet();
+    const strikesEl = $("#statStrikes");
+    if (strikesEl) strikesEl.textContent = String(clamp(state.strikesLeft, 0, STRIKES_MAX));
     $("#winGoalLabel").textContent = state.win === "blackout" ? "Blackout" : `${state.win} Bingo${state.win === "1" ? "" : "s"}`;
+    const endGameBtn = $("#btnEndGame");
+    if (endGameBtn) endGameBtn.classList.toggle("hidden", !state.keepPlayingDismissed);
     save();
+  }
+
+  function renderGameOverCard() {
+    const time = formatTime(state.elapsedMsAtWin || 0);
+    const score = Math.max(0, Math.floor(state.score));
+    const isBlackout = state.win === "blackout";
+    $("#overTitle").textContent = isBlackout ? "BLACKOUT!" : "BINGO!";
+
+    $("#overSubtitle").textContent = "You hit your win condition.";
+
+    const scoreEl = $("#overScoreVal");
+    const bingosEl = $("#overBingosVal");
+    const timeEl = $("#overTimeVal");
+    const bingosLabelEl = $("#overBingosLabel");
+    if (scoreEl) scoreEl.textContent = String(score);
+    if (bingosEl) bingosEl.textContent = String(state.bingos);
+    if (timeEl) timeEl.textContent = String(time);
+    if (bingosLabelEl) bingosLabelEl.textContent = state.bingos === 1 ? "Bingo" : "Bingos";
+  }
+
+  function resetRunProgress() {
+    state.board = [];
+    state.score = 0;
+    state.bingos = 0;
+    state.startedAt = 0;
+    state.won = false;
+    state.keepPlayingDismissed = false;
+    state.lastBingoLinesKey = "";
+    state.timerPaused = false;
+    state.pausedAt = 0;
+    state.accumulatedPauseMs = 0;
+    state.elapsedMsAtWin = 0;
+    state.strikesLeft = STRIKES_MAX;
+  }
+
+  function showGameOverNow() {
+    state.won = true;
+    state.keepPlayingDismissed = false;
+    state.elapsedMsAtWin = getElapsedMs();
+    save();
+    renderGameOverCard();
+    showScreen("over");
+    AudioSys.bingo();
   }
 
   // ---------- Long press / editing ----------
@@ -582,8 +731,8 @@
     const idx = +cell.dataset.idx;
 
     function onToggle() {
-      if (state.editMode) {
-        openEditCell(idx);
+      if (state.timerPaused) {
+        showToast("Resume the game to make a move.");
         return;
       }
       toggleCell(idx);
@@ -595,12 +744,12 @@
     });
 
     const startLP = (e) => {
-      if (state.editMode) return;
       lpFired = false;
       clearTimeout(lpTimer);
       lpTimer = setTimeout(() => {
+        if (state.timerPaused) return;
         lpFired = true;
-        openEditCell(idx);
+        openStrikeActions(idx);
         AudioSys.click(330, 0.06, "triangle", 0.05);
       }, 420);
     };
@@ -695,6 +844,119 @@
     };
   }
 
+  function spendStrike(action) {
+    if (state.strikesLeft <= 0) return false;
+    state.strikesLeft = clamp(state.strikesLeft - 1, 0, STRIKES_MAX);
+    const penalty = STRIKE_PENALTIES[action] || 0;
+    if (penalty) state.score -= penalty;
+    showToast(`-${penalty} points · Strikes left: ${state.strikesLeft}`);
+    return true;
+  }
+
+  function normalizeTextKey(s) {
+    return String(s || "").trim().toLowerCase();
+  }
+
+  function pickRandomReplacementGoal(excludeText) {
+    const used = new Set(state.board.map(t => normalizeTextKey(t && t.text)));
+    const pool = (state.goalsPool || []).filter(Boolean);
+    const candidates = pool.filter(g => {
+      const key = normalizeTextKey(g);
+      if (!key) return false;
+      if (key === normalizeTextKey(excludeText)) return false;
+      return !used.has(key);
+    });
+    if (!candidates.length) return null;
+    shuffle(candidates);
+    return candidates[0];
+  }
+
+  function recomputeBingosOnly() {
+    const { bingos, winningLines } = countBingos(state.board, state.size);
+    state.bingos = bingos;
+    state.lastBingoLinesKey = boardKeyForLines(winningLines);
+  }
+
+  function openStrikeActions(idx) {
+    const tile = state.board[idx];
+    if (!tile) return;
+    if (state.timerPaused) { showToast("Resume the game to make a move."); return; }
+    if (tile.free) { showToast("Free space can't be changed."); return; }
+    if (state.strikesLeft <= 0) { showToast("No strikes left."); return; }
+
+    const replacement = pickRandomReplacementGoal(tile.text);
+    const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+
+    openModal(`
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:10px;">
+        <div>
+          <div style="font-weight:900; font-size:18px;">⚡ Use a strike</div>
+          <div style="font-size:12px; color:#666;">Choose one action for this tile. Strikes left: <b>${state.strikesLeft}</b></div>
+        </div>
+        <button id="sClose" class="btn ghost">Close</button>
+      </div>
+      <div style="font-size:13px; color:#222; font-weight:700; margin-bottom:10px;">Tile: <span style="font-weight:900;">${esc(tile.text || "-")}</span></div>
+      <div style="display:flex; flex-direction:column; gap:10px;">
+        <button id="sEdit" class="btn secondary">✏️ Edit (-${STRIKE_PENALTIES.edit})</button>
+        <button id="sSkip" class="btn secondary">⏭ Skip (-${STRIKE_PENALTIES.skip})</button>
+        <button id="sReplace" class="btn secondary" ${replacement ? "" : "disabled"}>🎲 Replace random (-${STRIKE_PENALTIES.replace})</button>
+        <div style="font-size:12px; color:#666;">Replace picks a random unused goal from your Goal pool.</div>
+        ${replacement ? `<div style="font-size:12px; color:#666;">Preview: <b>${esc(replacement)}</b></div>` : `<div style="font-size:12px; color:#b23;">No unused goals available to replace with.</div>`}
+      </div>
+    `);
+
+    $("#sClose").onclick = closeModal;
+
+    $("#sEdit").onclick = () => {
+      if (!spendStrike("edit")) return;
+      save();
+      closeModal();
+      openEditCell(idx);
+      updateStats();
+    };
+
+    $("#sSkip").onclick = () => {
+      if (!spendStrike("skip")) return;
+      const prevChecked = !!tile.checked;
+      tile.checked = true;
+      tile.skipped = true;
+      const { bingos, winningLines } = countBingos(state.board, state.size);
+      state.bingos = bingos;
+      const key = boardKeyForLines(winningLines);
+      const prevKey = state.lastBingoLinesKey || "";
+      const prevSet = new Set(prevKey ? prevKey.split("|") : []);
+      const nextSet = new Set(key ? key.split("|") : []);
+      let newly = 0;
+      for (const k of nextSet) if (k && !prevSet.has(k)) newly++;
+      state.lastBingoLinesKey = key;
+      state.score += calcScoreDelta(prevChecked, true, newly);
+      if (newly > 0) AudioSys.bingo();
+      bestScoreMaybeSet(state.score);
+      save();
+      closeModal();
+      renderBoard();
+      updateStats();
+      checkWinAndMaybeOver();
+    };
+
+    const replaceBtn = $("#sReplace");
+    if (replaceBtn) replaceBtn.onclick = () => {
+      const newGoal = pickRandomReplacementGoal(tile.text);
+      if (!newGoal) { showToast("No unused goals available."); return; }
+      if (!spendStrike("replace")) return;
+      const prevChecked = !!tile.checked;
+      tile.text = newGoal;
+      tile.checked = false;
+      tile.skipped = false;
+      state.score += calcScoreDelta(prevChecked, false, 0);
+      recomputeBingosOnly();
+      save();
+      closeModal();
+      renderBoard();
+      updateStats();
+    };
+  }
+
   // ---------- Gameplay ----------
   let raf = 0;
 
@@ -704,15 +966,17 @@
     }
     if (!state.startedAt) state.startedAt = Date.now();
     state.won = false;
+    if (!state.timerPaused) state.accumulatedPauseMs = 0;
 
     showScreen("play");
     renderBoard();
     renderPreview();
+    updatePauseButtonLabel();
 
     cancelAnimationFrame(raf);
     const loop = () => {
       if (state.screen === "play" && state.startedAt) {
-        $("#statTime").textContent = formatTime(Date.now() - state.startedAt);
+        $("#statTime").textContent = formatTime(getElapsedMs());
       }
       raf = requestAnimationFrame(loop);
     };
@@ -720,9 +984,18 @@
     save();
   }
 
+  function updatePauseButtonLabel() {
+    const btn = $("#btnPauseTime");
+    if (btn) btn.textContent = state.timerPaused ? "▶ Resume" : "⏸ Pause";
+    const banner = $("#pauseBanner");
+    if (banner) banner.classList.toggle("hidden", !state.timerPaused);
+  }
+
   function toggleCell(idx) {
     const tile = state.board[idx];
     if (!tile || tile.free) { AudioSys.click(260, 0.04, "sine", 0.03); return; }
+    if (state.timerPaused) { showToast("Resume the game to make a move."); return; }
+    if (tile.skipped) { showToast("This tile is skipped."); AudioSys.click(220, 0.04, "sine", 0.03); return; }
 
     const prevChecked = tile.checked;
     tile.checked = !tile.checked;
@@ -752,7 +1025,6 @@
     bestScoreMaybeSet(state.score);
     save();
 
-    // Update the visual state of the cell
     const cellEl = $(`.cell[data-idx="${idx}"]`);
     if (cellEl) {
       if (tile.checked) {
@@ -761,8 +1033,6 @@
         cellEl.classList.remove("done");
       }
     } else {
-      // If cell not found, re-render the board to ensure consistency
-      console.warn(`Cell element not found for index ${idx}, re-rendering board`);
       renderBoard();
     }
     updateStats();
@@ -783,27 +1053,26 @@
 
     const total = state.board.length;
     const marked = state.board.reduce((a, t) => a + (t.checked ? 1 : 0), 0);
+    const need = parseInt(state.win, 10) || 1;
+    const stillWinning = state.win === "blackout" ? (marked === total) : (state.bingos >= need);
+
+    if (state.keepPlayingDismissed) {
+      if (stillWinning) return;
+      state.keepPlayingDismissed = false;
+    }
 
     let won = false;
     if (state.win === "blackout") {
       won = marked === total;
     } else {
-      const need = parseInt(state.win, 10) || 1;
       won = state.bingos >= need;
     }
 
     if (won) {
       state.won = true;
+      state.elapsedMsAtWin = getElapsedMs();
       save();
-      const time = state.startedAt ? formatTime(Date.now() - state.startedAt) : "0:00";
-      $("#overTitle").textContent = (state.win === "blackout") ? "🎉 BLACKOUT!" : "🎉 BINGO!";
-      const score = Math.max(0, Math.floor(state.score));
-      const bingoText = state.bingos === 1 ? "bingo" : "bingos";
-      $("#overSubtitle").innerHTML = `
-        <div style="margin-bottom:4px;">Score: <strong>${score}</strong></div>
-        <div style="margin-bottom:4px;">${state.bingos} ${bingoText}</div>
-        <div>Time: ${time}</div>
-      `;
+      renderGameOverCard();
       showScreen("over");
       AudioSys.bingo();
     }
@@ -813,19 +1082,128 @@
     for (const t of state.board) {
       if (t.free) continue;
       t.checked = false;
+      t.skipped = false;
     }
     if (state.free && (state.size % 2 === 1)) {
       const center = Math.floor(state.board.length / 2);
       if (state.board[center]) state.board[center].checked = true;
     }
+    state.strikesLeft = STRIKES_MAX;
     state.score = 0;
     state.bingos = countBingos(state.board, state.size).bingos;
     state.lastBingoLinesKey = boardKeyForLines(countBingos(state.board, state.size).winningLines);
     state.startedAt = Date.now();
     state.won = false;
+    state.keepPlayingDismissed = false;
+    state.timerPaused = false;
+    state.pausedAt = 0;
+    state.accumulatedPauseMs = 0;
     save();
     renderBoard();
+    updatePauseButtonLabel();
     AudioSys.click(300, 0.07, "triangle", 0.05);
+  }
+
+  function downloadBoardImage() {
+    const size = state.size;
+    const board = state.board;
+    if (!board || board.length !== size * size) return;
+
+    const pad = 16;
+    const gap = 4;
+    const gridSize = 520;
+    const cellSize = (gridSize - gap * (size - 1)) / size;
+    const titleHeight = 56;
+    const canvasWidth = gridSize + pad * 2;
+    const canvasHeight = titleHeight + gridSize + pad * 2;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = canvasWidth;
+    canvas.height = canvasHeight;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const now = new Date();
+    const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+
+    ctx.fillStyle = "#fefefe";
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+    ctx.fillStyle = "#2b2b2b";
+    ctx.font = "bold 18px system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.fillText("Bingo Board", canvasWidth / 2, 28);
+    ctx.font = "12px system-ui, sans-serif";
+    ctx.fillStyle = "#555";
+    ctx.fillText(dateStr, canvasWidth / 2, 46);
+
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    const cellFontPx = Math.max(10, Math.floor(cellSize / 6));
+
+    for (let i = 0; i < board.length; i++) {
+      const tile = board[i];
+      const row = Math.floor(i / size);
+      const col = i % size;
+      const x = pad + col * (cellSize + gap);
+      const y = titleHeight + pad + row * (cellSize + gap);
+
+      if (tile.free) ctx.fillStyle = "#e6e6ff";
+      else if (tile.skipped) ctx.fillStyle = "#f3f3f3";
+      else if (tile.checked) ctx.fillStyle = "#dfffe1";
+      else ctx.fillStyle = "#fff";
+      ctx.fillRect(x, y, cellSize, cellSize);
+
+      ctx.strokeStyle = "#222";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x, y, cellSize, cellSize);
+
+      const text = (tile.text || "-").trim();
+      ctx.fillStyle = tile.skipped ? "#666" : "#2a2a2a";
+      ctx.font = `bold ${cellFontPx}px system-ui, sans-serif`;
+      const maxW = cellSize - 10;
+      const words = text.split(/\s+/);
+      let line = "";
+      const lines = [];
+      for (const w of words) {
+        const test = line ? line + " " + w : w;
+        if (ctx.measureText(test).width <= maxW) line = test;
+        else {
+          if (line) lines.push(line);
+          line = ctx.measureText(w).width <= maxW ? w : w.slice(0, 8) + "...";
+        }
+      }
+      if (line) lines.push(line);
+      if (lines.length === 0) lines.push("-");
+      const maxLines = 3;
+      const drawn = lines.slice(0, maxLines);
+      const lineHeight = Math.min(cellSize / 5, 14);
+      const startY = y + cellSize / 2 - (drawn.length - 1) * (lineHeight / 2);
+      drawn.forEach((ln, j) => {
+        ctx.fillText(ln, x + cellSize / 2, startY + j * lineHeight);
+      });
+
+      if (tile.checked) {
+        ctx.fillStyle = "#2ecc71";
+        ctx.beginPath();
+        const cx = x + cellSize - 12;
+        const cy = y + 12;
+        ctx.arc(cx, cy, 8, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = "#222";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 12px system-ui";
+        ctx.fillText("✓", cx, cy + 1);
+      }
+    }
+
+    const dataUrl = canvas.toDataURL("image/png");
+    const a = document.createElement("a");
+    a.href = dataUrl;
+    a.download = `Bingo Board - ${dateStr}.png`;
+    a.click();
   }
 
   // ---------- Export/Import ----------
@@ -849,7 +1227,7 @@
   function importJSON(str) {
     const data = safeJSONParse(str);
     if (!data || !Array.isArray(data.board)) return false;
-    state.size = clamp(+data.size || 5, 3, 7);
+    state.size = clamp(+data.size || 5, 3, 5);
     state.free = !!data.free;
     state.win = (data.win ?? "1") + "";
     state.goalsPool = Array.isArray(data.goalsPool) ? data.goalsPool : [];
@@ -887,7 +1265,7 @@
   }
 
   function applySetupInputs() {
-    state.size = clamp(parseInt($("#sizeSelect").value, 10) || 5, 3, 7);
+    state.size = clamp(parseInt($("#sizeSelect").value, 10) || 5, 3, 5);
     state.free = !!$("#freeToggle").checked;
     state.win = $("#winSelect").value;
     state.goalsPool = normalizeGoalLines($("#goalsInput").value);
@@ -899,32 +1277,32 @@
     renderPreview();
   }
 
-  // ---------- Help modal ----------
+  // ---------- Help modal (How to play guide) ----------
   function openHelp() {
     openModal(`
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
         <div>
-          <div style="font-weight:900; font-size:18px;">💡 How it works</div>
-          <div style="font-size:12px; color:#666;">A bingo board for personal goals.</div>
+          <div style="font-weight:900; font-size:18px;">How to play</div>
+          <div style="font-size:12px; color:#666;">Guide to Bingo Board.</div>
         </div>
         <button id="hClose" class="btn ghost">Close</button>
       </div>
       <div style="display:flex; flex-direction:column; gap:12px;">
         <div class="setup-card">
-          <div style="font-weight:900; margin-bottom:6px;">🎯 Play</div>
-          <div style="font-size:13px; color:#666;">Tap a tile to mark it complete. Complete a full row/column/diagonal to score a Bingo.</div>
+          <div style="font-weight:900; margin-bottom:6px;">Play</div>
+          <div style="font-size:13px; color:#666;">Tap a tile to mark it complete. Complete a full row, column, or diagonal to score a Bingo.</div>
         </div>
         <div class="setup-card">
-          <div style="font-weight:900; margin-bottom:6px;">✏️ Edit</div>
-          <div style="font-size:13px; color:#666;">Long-press a tile to edit its text (or toggle Edit mode).</div>
+          <div style="font-weight:900; margin-bottom:6px;">Strikes</div>
+          <div style="font-size:13px; color:#666;">Long-press a tile to use a strike: edit the goal, skip it (counts as marked), or replace with a random goal from your pool. You get 3 strikes per game.</div>
         </div>
         <div class="setup-card">
-          <div style="font-weight:900; margin-bottom:6px;">📊 Scoring</div>
+          <div style="font-weight:900; margin-bottom:6px;">Scoring</div>
           <div style="font-size:13px; color:#666;">+10 per mark, −8 per unmark, +75 for each newly completed Bingo line.</div>
         </div>
         <div class="setup-card">
-          <div style="font-weight:900; margin-bottom:6px;">💾 Save & Share</div>
-          <div style="font-size:13px; color:#666;">Your board auto-saves. Export/Import preserves exact layout + checkmarks.</div>
+          <div style="font-weight:900; margin-bottom:6px;">Save & share</div>
+          <div style="font-size:13px; color:#666;">Your board auto-saves. Use Save Card to store a named card; use Download Card after a win to save an image of your board. Export/Import preserves exact layout and checkmarks.</div>
         </div>
       </div>
     `);
@@ -938,19 +1316,28 @@
   });
   $("#freeToggle").addEventListener("change", applySetupInputs);
   $("#winSelect").addEventListener("change", applySetupInputs);
+  const previewShowGoalsEl = $("#previewShowGoals");
+  if (previewShowGoalsEl) previewShowGoalsEl.addEventListener("change", renderPreview);
   $("#goalsInput").addEventListener("input", () => {
     state.goalsPool = normalizeGoalLines($("#goalsInput").value);
+    state.board = [];
     save();
+    updateSetupButtonStates();
+    renderPreview();
   });
 
   $("#btnFillSample").onclick = () => {
     $("#goalsInput").value = defaultSampleGoals();
     applySetupInputs();
+    updateSetupButtonStates();
+    renderPreview();
     AudioSys.click(440, 0.06, "triangle", 0.05);
   };
   $("#btnClearGoals").onclick = () => {
     $("#goalsInput").value = "";
     applySetupInputs();
+    updateSetupButtonStates();
+    renderPreview();
     AudioSys.click(220, 0.05, "sine", 0.04);
   };
 
@@ -1071,43 +1458,6 @@
     });
   };
 
-  $("#btnSaveSlot").onclick = () => {
-    applySetupInputs();
-    openModal(`
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-        <div style="font-weight:900; font-size:18px;">Save to slot</div>
-        <button id="slotSaveClose" class="btn ghost">Close</button>
-      </div>
-      <div style="margin-bottom:12px;">
-        <label style="display:block; font-weight:700; font-size:12px; margin-bottom:6px;">Title for this save (optional)</label>
-        <input id="slotSaveTitle" class="field" placeholder="e.g. Week 1 goals" />
-      </div>
-      <div style="display:flex; gap:8px; justify-content:flex-end;">
-        <button id="slotSaveCancel" class="btn ghost">Cancel</button>
-        <button id="slotSaveConfirm" class="btn">Save</button>
-      </div>
-    `);
-    $("#slotSaveClose").onclick = closeModal;
-    $("#slotSaveCancel").onclick = closeModal;
-    $("#slotSaveConfirm").onclick = () => {
-      const title = $("#slotSaveTitle").value.trim();
-      saveSlot(title || null);
-      closeModal();
-      AudioSys.success();
-      openModal(`
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-          <div style="font-weight:900; font-size:18px;">Saved to slot</div>
-          <button id="slotConfirmClose" class="btn ghost">OK</button>
-        </div>
-        <div class="setup-card" style="margin:0;">
-          <div style="font-weight:700; margin-bottom:6px;">Snapshot saved.</div>
-          <div style="font-size:13px; color:#555;">It appears in <strong>Saved slots</strong> below. Click <strong>Load</strong> on any slot to restore it.</div>
-        </div>
-      `);
-      $("#slotConfirmClose").onclick = closeModal;
-    };
-  };
-
   $("#btnGenerate").onclick = () => {
     applySetupInputs();
     if (state.goalsPool.length === 0) {
@@ -1128,82 +1478,134 @@
     if (!state.board.length) generateBoard();
     state.startedAt = Date.now();
     state.won = false;
+    state.keepPlayingDismissed = false;
     save();
     startGameplay();
     AudioSys.success();
   };
 
-  $("#btnContinue").onclick = () => {
-    AudioSys.resume();
-    const ok = load();
-    if (ok) {
-      syncSetupControls();
-      startGameplay();
-      AudioSys.success();
-    } else {
-      AudioSys.click(220, 0.06, "sine", 0.05);
-      showToast("No saved board found. Generate a new one!");
-    }
-  };
-
-  $("#btnNew").onclick = () => {
-    AudioSys.resume();
-    state.board = [];
-    state.score = 0;
-    state.bingos = 0;
-    state.startedAt = 0;
-    state.won = false;
-    state.lastBingoLinesKey = "";
-    // Generate a new board if goals are available
-    applySetupInputs();
-    if (state.goalsPool.length === 0) {
-      $("#goalsInput").value = defaultSampleGoals();
-      applySetupInputs();
-    }
-    generateBoard();
-    save();
-    renderPreview();
-    AudioSys.click(320, 0.06, "triangle", 0.05);
+  $("#btnEndGame").onclick = () => {
+    showGameOverNow();
   };
 
   $("#btnBackToSetup").onclick = () => {
-    showScreen("start");
-    renderPreview();
-    AudioSys.click(280, 0.05, "sine", 0.04);
+    openModal(`
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <div>
+          <div style="font-weight:900; font-size:18px;">Exit game?</div>
+          <div style="font-size:12px; color:#666;">Your current progress will be reset.</div>
+        </div>
+        <button id="exitClose" class="btn ghost">Cancel</button>
+      </div>
+      <div class="setup-card" style="margin:0 0 12px 0;">
+        <div style="font-weight:700; margin-bottom:6px;">This will take you back to setup.</div>
+        <div style="font-size:13px; color:#555;">Your goal pool and settings stay the same, but the current board/run will be cleared.</div>
+      </div>
+      <div style="display:flex; gap:8px; justify-content:flex-end;">
+        <button id="exitCancel" class="btn ghost">Cancel</button>
+        <button id="exitOk" class="btn">Exit</button>
+      </div>
+    `);
+    $("#exitClose").onclick = closeModal;
+    $("#exitCancel").onclick = closeModal;
+    $("#exitOk").onclick = () => {
+      closeModal();
+      AudioSys.resume();
+      resetRunProgress();
+      save();
+      showScreen("start");
+      syncSetupControls();
+      renderPreview();
+      AudioSys.click(280, 0.05, "sine", 0.04);
+    };
   };
 
   $("#btnResetMarks").onclick = () => {
     openModal(`
       <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
         <div>
-          <div style="font-weight:900; font-size:18px;">🔄 Reset all marks?</div>
-          <div style="font-size:12px; color:#666;">Keeps your current goals/layout.</div>
+          <div style="font-weight:900; font-size:18px;">🔄 Reset</div>
+          <div style="font-size:12px; color:#666;">Choose what to reset.</div>
         </div>
         <button id="rClose" class="btn ghost">Close</button>
       </div>
-      <div style="display:flex; gap:8px; justify-content:flex-end;">
-        <button id="rCancel" class="btn ghost">Cancel</button>
-        <button id="rOk" class="btn">Reset</button>
+      <div style="display:flex; flex-direction:column; gap:10px;">
+        <button id="rMarksOnly" class="btn secondary">Reset marks only</button>
+        <div style="font-size:12px; color:#666;">Clear all checkmarks and skipped tiles, restore strikes to 3. Same goals in the same spots.</div>
+        <button id="rCardAndShuffle" class="btn secondary">Reset card & shuffle goals</button>
+        <div style="font-size:12px; color:#666;">New random placement of goals from your pool, then clear marks and restore strikes.</div>
       </div>
     `);
     $("#rClose").onclick = closeModal;
-    $("#rCancel").onclick = closeModal;
-    $("#rOk").onclick = () => {
+    $("#rMarksOnly").onclick = () => {
       closeModal();
       resetMarks();
     };
+    $("#rCardAndShuffle").onclick = () => {
+      closeModal();
+      generateBoard();
+      state.startedAt = Date.now();
+      state.won = false;
+      state.keepPlayingDismissed = false;
+      state.timerPaused = false;
+      state.pausedAt = 0;
+      state.accumulatedPauseMs = 0;
+      save();
+      renderBoard();
+      updatePauseButtonLabel();
+      AudioSys.click(300, 0.07, "triangle", 0.05);
+    };
   };
 
-  $("#btnShuffleUnmarked").onclick = () => {
-    shuffleUnmarked();
-    AudioSys.click(420, 0.06, "triangle", 0.05);
-  };
-
-  $("#btnEditMode").onclick = () => {
-    state.editMode = !state.editMode;
-    $("#btnEditMode").textContent = `Edit: ${state.editMode ? "On" : "Off"}`;
-    AudioSys.click(state.editMode ? 520 : 280, 0.05, "sine", 0.04);
+  $("#btnPauseTime").onclick = () => {
+    if (state.timerPaused) {
+      state.accumulatedPauseMs += (Date.now() - state.pausedAt);
+      state.timerPaused = false;
+      state.pausedAt = 0;
+    } else {
+      state.pausedAt = Date.now();
+      state.timerPaused = true;
+    }
+    updatePauseButtonLabel();
     save();
+    AudioSys.click(380, 0.05, "sine", 0.04);
+  };
+
+  $("#btnViewSavedCard").onclick = () => {
+    openViewSavedCardModal();
+    AudioSys.click(440, 0.05, "sine", 0.04);
+  };
+
+  $("#btnSaveCardImage").onclick = () => {
+    downloadBoardImage();
+    showToast("Card image downloaded.");
+    AudioSys.click(440, 0.05, "sine", 0.04);
+  };
+
+  $("#btnSaveCardOver").onclick = () => {
+    openModal(`
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <div style="font-weight:900; font-size:18px;">Save Card</div>
+        <button id="saveCardModalClose" class="btn ghost">Cancel</button>
+      </div>
+      <div style="margin-bottom:12px;">
+        <label style="display:block; font-weight:700; font-size:12px; margin-bottom:6px;">Card name</label>
+        <input id="saveCardName" class="field" placeholder="e.g. Week 1 Bingo" autofocus />
+      </div>
+      <div style="display:flex; gap:8px; justify-content:flex-end;">
+        <button id="saveCardCancel" class="btn ghost">Cancel</button>
+        <button id="saveCardConfirm" class="btn">Save</button>
+      </div>
+    `);
+    $("#saveCardModalClose").onclick = closeModal;
+    $("#saveCardCancel").onclick = closeModal;
+    $("#saveCardConfirm").onclick = () => {
+      const name = $("#saveCardName").value.trim() || "Bingo card";
+      saveCurrentCard(name);
+      closeModal();
+      AudioSys.success();
+      showToast("Card saved. View it from home.");
+    };
   };
 
   $("#btnHelp").onclick = () => {
@@ -1217,6 +1619,7 @@
     $("#btnSound").textContent = `Sound: ${AudioSys.enabled ? "On" : "Off"}`;
     if (AudioSys.enabled) AudioSys.resume();
     AudioSys.click(380, 0.05, "triangle", 0.05);
+    updateSetupButtonStates();
     save();
   };
 
@@ -1321,40 +1724,84 @@
 
   $("#btnKeepPlaying").onclick = () => {
     AudioSys.resume();
+    state.won = false;
+    state.keepPlayingDismissed = true;
+    state.elapsedMsAtWin = 0;
+    save();
     showScreen("play");
     renderBoard();
+    updatePauseButtonLabel();
     AudioSys.success();
   };
   $("#btnNewRound").onclick = () => {
-    AudioSys.resume();
-    showScreen("start");
-    state.board = [];
-    state.score = 0;
-    state.bingos = 0;
-    state.startedAt = 0;
-    state.won = false;
-    state.lastBingoLinesKey = "";
-    save();
-    renderPreview();
-    AudioSys.click(360, 0.06, "triangle", 0.05);
+    openModal(`
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <div>
+          <div style="font-weight:900; font-size:18px;">Start a brand new setup?</div>
+          <div style="font-size:12px; color:#666;">This clears your goal pool.</div>
+        </div>
+        <button id="newClose" class="btn ghost">Cancel</button>
+      </div>
+      <div class="setup-card" style="margin:0 0 12px 0;">
+        <div style="font-weight:700; margin-bottom:6px;">You’ll return to setup with an empty goal list.</div>
+        <div style="font-size:13px; color:#555;">You can paste a new set of goals and click <strong>Generate</strong> again.</div>
+      </div>
+      <div style="display:flex; gap:8px; justify-content:flex-end;">
+        <button id="newCancel" class="btn ghost">Cancel</button>
+        <button id="newOk" class="btn" style="background:var(--ui-bad); border-color:var(--ui-bad);">Clear &amp; go to setup</button>
+      </div>
+    `);
+    $("#newClose").onclick = closeModal;
+    $("#newCancel").onclick = closeModal;
+    $("#newOk").onclick = () => {
+      closeModal();
+      AudioSys.resume();
+      $("#goalsInput").value = "";
+      state.goalsPool = [];
+      resetRunProgress();
+      save();
+      syncSetupControls();
+      showScreen("start");
+      renderPreview();
+      AudioSys.click(220, 0.05, "sine", 0.04);
+    };
   };
   $("#btnOverSetup").onclick = () => {
-    AudioSys.resume();
-    showScreen("start");
-    renderPreview();
-    AudioSys.click(260, 0.05, "sine", 0.04);
+    openModal(`
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+        <div>
+          <div style="font-weight:900; font-size:18px;">Back to setup?</div>
+          <div style="font-size:12px; color:#666;">Your run will be cleared.</div>
+        </div>
+        <button id="overSetupClose" class="btn ghost">Cancel</button>
+      </div>
+      <div class="setup-card" style="margin:0 0 12px 0;">
+        <div style="font-weight:700; margin-bottom:6px;">Keep the same goals and settings.</div>
+        <div style="font-size:13px; color:#555;">You’ll go back to setup with your current goal pool and options. The current board/progress will be reset.</div>
+      </div>
+      <div style="display:flex; gap:8px; justify-content:flex-end;">
+        <button id="overSetupCancel" class="btn ghost">Cancel</button>
+        <button id="overSetupOk" class="btn">Back to setup</button>
+      </div>
+    `);
+    $("#overSetupClose").onclick = closeModal;
+    $("#overSetupCancel").onclick = closeModal;
+    $("#overSetupOk").onclick = () => {
+      closeModal();
+      AudioSys.resume();
+      resetRunProgress();
+      save();
+      syncSetupControls();
+      showScreen("start");
+      renderPreview();
+      AudioSys.click(260, 0.05, "sine", 0.04);
+    };
   };
 
   // Keyboard shortcuts
   window.addEventListener("keydown", (e) => {
     if (e.key.toLowerCase() === "r" && state.screen === "play") {
       resetMarks();
-    }
-    if (e.key.toLowerCase() === "e" && state.screen === "play") {
-      state.editMode = !state.editMode;
-      $("#btnEditMode").textContent = `Edit: ${state.editMode ? "On" : "Off"}`;
-      AudioSys.click(state.editMode ? 520 : 280, 0.05, "sine", 0.04);
-      save();
     }
     if (e.key === "Escape" && !$("#modalHost").classList.contains("hidden")) {
       closeModal();
@@ -1365,7 +1812,7 @@
   (function init() {
     const share = decodeShareFromHash();
     if (share) {
-      state.size = clamp(+share.s || 5, 3, 7);
+      state.size = clamp(+share.s || 5, 3, 5);
       state.free = !!share.f;
       state.win = (share.w ?? "1") + "";
       state.goalsPool = Array.isArray(share.g) ? share.g.map(x => (x ?? "").toString()).filter(Boolean) : [];
@@ -1395,9 +1842,8 @@
     }
 
     showScreen("start");
-    renderSlotsList();
     $("#btnSound").textContent = `Sound: ${AudioSys.enabled ? "On" : "Off"}`;
-    $("#btnEditMode").textContent = `Edit: ${state.editMode ? "On" : "Off"}`;
+    updateSetupButtonStates();
   })();
 
   // Expose functions globally for music player

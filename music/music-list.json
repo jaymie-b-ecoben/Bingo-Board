@@ -1,8 +1,13 @@
 [
   {
-    "file": "9-TEEN_Seventeen.mp3",
-    "name": "9-TEEN",
+    "file": "9-TEEN.mp3",
+    "name": "9 Teen",
     "artist": "Seventeen"
+  },
+  {
+    "file": "Jazz.mp3",
+    "name": "Jazz",
+    "artist": "Background"
   },
   {
     "file": "Paradise_Chase-Atlantic.mp3",

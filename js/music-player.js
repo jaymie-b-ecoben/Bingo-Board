@@ -28,6 +28,8 @@
     };
     
     const MUSIC_STORAGE_KEY = "quest_bingo_music_v1";
+    const MUSIC_LOOP_KEY = "quest_bingo_music_loop_current_v1";
+    const MUSIC_BG_KEY = "quest_bingo_music_background_choice_v1";
     
     const MusicPlayer = (() => {
       let audioElement = null;
@@ -36,6 +38,9 @@
       let currentSongIndex = 0;
       let progressInterval = null;
       let youtubeIframe = null;
+      let loopCurrent = false;
+      let bgChoice = "9-teen";
+      let hasSavedBgChoice = false;
 
       const pixelEmojis = [
         "🎮",
@@ -140,10 +145,22 @@
         return { title: title || "Unknown", artist: artist || "Unknown" };
       }
 
+      function formatTimeDisplay(seconds){
+        if(!Number.isFinite(seconds) || seconds < 0) return "0:00";
+        const m = Math.floor(seconds / 60);
+        const s = Math.floor(seconds % 60);
+        return `${m}:${String(s).padStart(2, "0")}`;
+      }
+
       let songs = [];
       let shuffleMode = false;
       let repeatMode = false;
       let originalOrder = [];
+      const BG_PRESETS = {
+        "9-teen": "9-TEEN.mp3",
+        "jazz": "Jazz.mp3",
+        "paradise": "Paradise_Chase-Atlantic.mp3"
+      };
 
       async function loadSongsFromFolder(){
         if(window.location.protocol === 'file:') return Promise.resolve();
@@ -158,9 +175,19 @@
                 const url = `./music/${fileName}`;
                 loadedFiles.add(fileName.toLowerCase());
                 const exists = songs.find(s => s.url === url || (s.file && s.file.toLowerCase() === fileName.toLowerCase()));
-                if(!exists){
-                  const title = item.name || fileName.replace(/\.[^/.]+$/, "").replace(/-/g, " ").replace(/_/g, " ");
-                  const artistName = item.artist || "Music Folder";
+                const title = item.name || fileName.replace(/\.[^/.]+$/, "").replace(/-/g, " ").replace(/_/g, " ");
+                const artistName = item.artist || "Music Folder";
+                if(exists){
+                  exists.name = title;
+                  exists.artist = artistName;
+                  exists.titleArtist = formatTitleArtist(title, artistName);
+                  if(item.emoji) exists.emoji = item.emoji;
+                  if(item.color) exists.color = item.color;
+                  exists.file = exists.file || fileName;
+                  exists.url = exists.url || url;
+                  exists.type = exists.type || "mp3";
+                  exists.fromFolder = true;
+                } else {
                   songs.push({
                     titleArtist: formatTitleArtist(title, artistName),
                     name: title,
@@ -247,6 +274,19 @@
         }
       }
 
+      function loadPrefs(){
+        const rawLoop = localStorage.getItem(MUSIC_LOOP_KEY);
+        loopCurrent = rawLoop === "1";
+        const rawBg = localStorage.getItem(MUSIC_BG_KEY);
+        hasSavedBgChoice = rawBg !== null;
+        bgChoice = rawBg !== null && rawBg !== "" ? rawBg : "9-teen";
+      }
+
+      function savePrefs(){
+        localStorage.setItem(MUSIC_LOOP_KEY, loopCurrent ? "1" : "0");
+        localStorage.setItem(MUSIC_BG_KEY, bgChoice || "9-teen");
+      }
+
       function saveSongs(){
         localStorage.setItem(MUSIC_STORAGE_KEY, JSON.stringify(songs));
       }
@@ -300,7 +340,7 @@
           audioElement = null;
         }
         audioElement = new Audio(url);
-        audioElement.loop = true;
+        audioElement.loop = !!loopCurrent;
         audioElement.volume = 0.7;
         if(window.location.protocol !== 'file:' && !url.startsWith('blob:') && !url.startsWith('data:')) {
           audioElement.crossOrigin = "anonymous";
@@ -366,7 +406,8 @@
           youtubeIframe.width = "0";
           youtubeIframe.height = "0";
           youtubeIframe.allow = "autoplay; encrypted-media";
-          youtubeIframe.src = `https://www.youtube.com/embed/${videoId}?autoplay=1&loop=${repeatMode ? 1 : 0}&playlist=${repeatMode ? videoId : ''}&enablejsapi=1&controls=0&modestbranding=1`;
+          const shouldLoop = !!loopCurrent;
+          youtubeIframe.src = `https://www.youtube.com/embed/${videoId}?autoplay=1&loop=${shouldLoop ? 1 : 0}&playlist=${shouldLoop ? videoId : ''}&enablejsapi=1&controls=0&modestbranding=1`;
           youtubeIframe.setAttribute("frameborder", "0");
           youtubeIframe.setAttribute("allowfullscreen", "1");
           youtubeIframe.onerror = () => {
@@ -396,6 +437,8 @@
           progressInterval = null;
         }
         $("#musicProgress").style.width = "0%";
+        const timeEl = $("#musicTime");
+        if(timeEl) timeEl.textContent = "0:00 / 0:00";
         updateUI();
       }
 
@@ -420,15 +463,29 @@
 
       function updateProgress(){
         if(progressInterval) clearInterval(progressInterval);
-        
+        const timeEl = $("#musicTime");
+        function setTimeDisplay(current, total){
+          if(timeEl) timeEl.textContent = formatTimeDisplay(current) + " / " + formatTimeDisplay(total);
+        }
+        if(audioElement){
+          if(!Number.isFinite(audioElement.duration) || audioElement.duration <= 0){
+            setTimeDisplay(audioElement.currentTime || 0, 0);
+          }else{
+            setTimeDisplay(audioElement.currentTime, audioElement.duration);
+          }
+        }else{
+          setTimeDisplay(0, 0);
+        }
         progressInterval = setInterval(() => {
           if(audioElement && !audioElement.paused){
             const progress = (audioElement.currentTime / audioElement.duration) * 100;
             $("#musicProgress").style.width = (progress || 0) + "%";
+            setTimeDisplay(audioElement.currentTime, audioElement.duration);
           }else if(youtubeIframe){
             $("#musicProgress").style.width = "50%";
+            if(timeEl) timeEl.textContent = "— / —";
           }
-        }, 100);
+        }, 250);
       }
 
       function updateUI(){
@@ -708,6 +765,59 @@
         }
       }
 
+      function setLoopCurrent(v){
+        loopCurrent = !!v;
+        savePrefs();
+        if(audioElement){
+          audioElement.loop = loopCurrent;
+        }
+        updateQueueUI();
+      }
+
+      function setBackgroundChoice(choice){
+        bgChoice = choice || "none";
+        hasSavedBgChoice = true;
+        savePrefs();
+      }
+
+      function findSongIndexByFile(fileName){
+        if(!fileName) return -1;
+        const target = String(fileName).toLowerCase();
+        return songs.findIndex(s => {
+          const f = (s.file || "").toLowerCase();
+          if(f && f === target) return true;
+          const url = (s.url || "").toLowerCase();
+          return url.endsWith("/" + target) || url.endsWith("\\" + target);
+        });
+      }
+
+      function getPlaylistForBackground(){
+        return songs.filter(s => s.file).map(s => ({
+          file: s.file,
+          name: (s.name || parseTitleArtist(s.titleArtist || "").title || "Unknown").trim(),
+          artist: (s.artist || "Unknown").trim()
+        }));
+      }
+
+      function resolveBackgroundFile(choice){
+        if(!choice || choice === "none") return null;
+        return BG_PRESETS[choice] || choice;
+      }
+
+      function tryAutoPlayIndex(index){
+        if(index < 0) return;
+        MusicPlayer.play(index).catch(e => {
+          if(e && (e.name === "NotAllowedError" || (e.message || "").includes("user didn"))) {
+            showToast("Autoplay blocked by browser. Press ▶ to start music.");
+            const unlock = () => {
+              MusicPlayer.play(index).catch(() => {});
+            };
+            document.addEventListener("click", unlock, { once: true });
+            document.addEventListener("touchstart", unlock, { once: true });
+          }
+        });
+      }
+
       function toggleShuffle(){
         shuffleMode = !shuffleMode;
         updateQueueUI();
@@ -723,6 +833,7 @@
       function updateQueueUI(){
         const shuffleBtn = $("#musicShuffle");
         const repeatBtn = $("#musicRepeat");
+        const loopBtn = $("#musicLoop");
         if(shuffleBtn){
           shuffleBtn.classList.toggle("active", shuffleMode);
           shuffleBtn.style.opacity = shuffleMode ? "1" : "0.6";
@@ -731,10 +842,16 @@
           repeatBtn.classList.toggle("active", repeatMode);
           repeatBtn.style.opacity = repeatMode ? "1" : "0.6";
         }
+        if(loopBtn){
+          loopBtn.classList.toggle("active", loopCurrent);
+          loopBtn.style.opacity = loopCurrent ? "1" : "0.6";
+          loopBtn.textContent = loopCurrent ? "LOOP" : "LOOP";
+        }
       }
 
 
       loadSongs();
+      loadPrefs();
 
       return {
         play: (index) => {
@@ -754,6 +871,7 @@
         addYouTube: (url, name, artist) => addYouTube(url, name, artist),
         get currentIndex() { return currentSongIndex; },
         get isPlaying() { return isPlaying; },
+        get _hasSavedBgChoice() { return hasSavedBgChoice; },
         get songsCount() { return songs.length; },
         loadSongs: () => loadSongs(),
         loadSongsFromFolder: () => loadSongsFromFolder(),
@@ -761,6 +879,15 @@
         deleteSong: (index) => deleteSong(index),
         saveSongs: () => saveSongs(),
         updateQueueUI: () => updateQueueUI(),
+        setLoopCurrent: (v) => setLoopCurrent(v),
+        get loopCurrent() { return loopCurrent; },
+        setBackgroundChoice: (c) => setBackgroundChoice(c),
+        get backgroundChoice() { return bgChoice; },
+        tryAutoPlayIndex: (i) => tryAutoPlayIndex(i),
+        findSongIndexByFile: (f) => findSongIndexByFile(f),
+        getPlaylistForBackground: () => getPlaylistForBackground(),
+        resolveBackgroundFile: (c) => resolveBackgroundFile(c),
+        BG_PRESETS,
         renderPlaylist,
         updateUI
       };
@@ -770,6 +897,7 @@
     (async () => {
       const initMusicPlayer = async () => {
         MusicPlayer.loadSongs();
+        if(MusicPlayer.updateQueueUI) MusicPlayer.updateQueueUI();
         const uploadedCount = MusicPlayer.songsCount;
         await MusicPlayer.loadSongsFromFolder();
         MusicPlayer.saveSongs();
@@ -784,20 +912,14 @@
           MusicPlayer.renderPlaylist();
         };
         renderWithRetry();
-        if(MusicPlayer.songsCount > 0){
-          setTimeout(() => {
-            MusicPlayer.play(0).catch(e => {
-              if(e.name === 'NotAllowedError' || e.message.includes('user didn\'t interact')) {
-                const tryAutoPlay = () => {
-                  if(MusicPlayer) MusicPlayer.play(0);
-                  document.removeEventListener("click", tryAutoPlay);
-                  document.removeEventListener("touchstart", tryAutoPlay);
-                };
-                document.addEventListener("click", tryAutoPlay, { once: true });
-                document.addEventListener("touchstart", tryAutoPlay, { once: true });
-              }
-            });
-          }, 500);
+        if(MusicPlayer.backgroundChoice && MusicPlayer.backgroundChoice !== "none"){
+          const fileToPlay = MusicPlayer.resolveBackgroundFile(MusicPlayer.backgroundChoice);
+          const idx = fileToPlay ? MusicPlayer.findSongIndexByFile(fileToPlay) : -1;
+          if(idx >= 0){
+            setTimeout(() => { MusicPlayer.tryAutoPlayIndex(idx); }, 350);
+          }else if(showToast){
+            showToast("Background music track not in playlist.");
+          }
         }
       };
       
@@ -825,8 +947,10 @@
       const musicUploadBtn = $("#musicUploadBtn");
       const musicFileInput = $("#musicFileInput");
       const musicYoutubeBtn = $("#musicYoutubeBtn");
+      const musicLoopBtn = $("#musicLoop");
+      const btnBackgroundMusic = $("#btnBackgroundMusic");
       
-      if(!btnMusic || !musicToggle || !musicPlayer || !musicPlay || !musicNext || !musicPrev || !musicUploadBtn || !musicFileInput || !musicYoutubeBtn){
+      if(!musicToggle || !musicPlayer || !musicPlay || !musicNext || !musicPrev || !musicUploadBtn || !musicFileInput || !musicYoutubeBtn){
         setTimeout(wireUpControls, 100);
         return;
       }
@@ -839,14 +963,16 @@
         if(toggle) toggle.textContent = isCollapsed ? "▲" : "▼";
       }
       
-      btnMusic.onclick = () => {
-        const player = $("#musicPlayer");
-        if(player){
-          player.classList.toggle("collapsed");
-          updateCollapsedIcon();
-          if(AudioSys && AudioSys.click) AudioSys.click(440, 0.05, "triangle", 0.04);
-        }
-      };
+      if(btnMusic){
+        btnMusic.onclick = () => {
+          const player = $("#musicPlayer");
+          if(player){
+            player.classList.toggle("collapsed");
+            updateCollapsedIcon();
+            if(AudioSys && AudioSys.click) AudioSys.click(440, 0.05, "triangle", 0.04);
+          }
+        };
+      }
 
       musicToggle.onclick = () => {
         const player = $("#musicPlayer");
@@ -879,59 +1005,102 @@
           if(AudioSys && AudioSys.click) AudioSys.click(440, 0.05, "triangle", 0.04);
         }
       };
-      musicUploadBtn.onclick = () => {
-        if(musicFileInput) musicFileInput.click();
-      };
-      musicYoutubeBtn.onclick = () => {
+
+      if(musicLoopBtn){
+        musicLoopBtn.onclick = () => {
+          if(MusicPlayer && MusicPlayer.setLoopCurrent){
+            MusicPlayer.setLoopCurrent(!MusicPlayer.loopCurrent);
+            if(AudioSys && AudioSys.click) AudioSys.click(440, 0.05, "triangle", 0.04);
+          }
+        };
+      }
+
+      if(btnBackgroundMusic){
+        btnBackgroundMusic.onclick = () => {
+          const current = MusicPlayer && MusicPlayer.backgroundChoice ? MusicPlayer.backgroundChoice : "none";
+          let selectedChoice = current;
+          const list = (MusicPlayer && MusicPlayer.getPlaylistForBackground) ? MusicPlayer.getPlaylistForBackground() : [];
+          const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+          const optionsHtml = list.map(s => `<button type="button" class="btn ghost bg-choice" data-choice="${esc(s.file)}" style="text-align:left; justify-content:flex-start;">${esc(s.name)}${s.artist && s.artist !== "Unknown" ? " — " + esc(s.artist) : ""}</button>`).join("");
+          openModal(`
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+              <div style="font-weight:900; font-size:18px;">Select background music</div>
+              <button id="bgClose" class="btn ghost">Close</button>
+            </div>
+            <div class="setup-card" style="margin:0 0 12px 0;">
+              <div style="font-weight:700; margin-bottom:8px;">Choose a track from the music player to auto-play when the game is opened.</div>
+              <div style="font-size:12px; color:#666; margin-bottom:12px;">Background music will auto-play when the game is opened (if your browser allows autoplay).</div>
+              <div style="display:flex; flex-direction:column; gap:8px;">
+                <button type="button" class="btn ghost bg-choice" data-choice="none" style="text-align:left; justify-content:flex-start;">None</button>
+                ${optionsHtml}
+              </div>
+              <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:14px;">
+                <button id="bgSave" class="btn">Save</button>
+              </div>
+            </div>
+          `);
+          $("#bgClose").onclick = closeModal;
+          function resolvedCurrent(){
+            if(!selectedChoice || selectedChoice === "none") return "none";
+            return (MusicPlayer && MusicPlayer.resolveBackgroundFile && MusicPlayer.resolveBackgroundFile(selectedChoice)) || selectedChoice;
+          }
+          function setActive(){
+            const resolved = resolvedCurrent();
+            $$(".bg-choice").forEach(btn => {
+              btn.classList.toggle("active", btn.getAttribute("data-choice") === resolved);
+            });
+          }
+          setActive();
+          $$(".bg-choice").forEach(btn => {
+            btn.onclick = () => {
+              const choice = btn.getAttribute("data-choice") || "none";
+              selectedChoice = choice;
+              setActive();
+              if(choice === "none"){
+                MusicPlayer && MusicPlayer.stop && MusicPlayer.stop();
+                if(AudioSys && AudioSys.click) AudioSys.click(440, 0.05, "triangle", 0.04);
+                return;
+              }
+              const idx = (MusicPlayer && MusicPlayer.findSongIndexByFile) ? MusicPlayer.findSongIndexByFile(choice) : -1;
+              if(idx >= 0 && MusicPlayer && MusicPlayer.play){
+                MusicPlayer.play(idx).catch(() => {});
+              }
+              if(AudioSys && AudioSys.click) AudioSys.click(440, 0.05, "triangle", 0.04);
+            };
+          });
+          $("#bgSave").onclick = () => {
+            if(MusicPlayer && MusicPlayer.setBackgroundChoice) MusicPlayer.setBackgroundChoice(selectedChoice);
+            closeModal();
+            if(selectedChoice === "none"){
+              if(showToast) showToast("Saved. No background music will play next time.");
+            }else{
+              if(showToast) showToast("Saved! This will be your starting song next time.");
+            }
+            if(AudioSys && AudioSys.click) AudioSys.click(440, 0.05, "triangle", 0.04);
+          };
+        };
+      }
+      function showUnderDevelopmentModal(){
         openModal(`
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-            <div>
-              <div style="font-weight:900; font-size:18px;">▶ YouTube Link</div>
-              <div style="font-size:12px; color:#666;">Add a YouTube video to play</div>
-            </div>
-            <button id="yClose" class="btn ghost">Close</button>
+            <div style="font-weight:900; font-size:18px;">Cozy Tunes</div>
+            <button id="underDevClose" class="btn ghost">Close</button>
           </div>
-          <div style="margin-bottom:12px;">
-            <label style="display:block; font-weight:700; font-size:12px; margin-bottom:6px;">YouTube URL</label>
-            <input id="yUrl" class="field" placeholder="https://youtube.com/watch?v=..." autofocus />
-          </div>
-          <div style="margin-bottom:12px;">
-            <label style="display:block; font-weight:700; font-size:12px; margin-bottom:6px;">Song Name (optional)</label>
-            <input id="yName" class="field" placeholder="Enter song name" />
-          </div>
-          <div style="margin-bottom:12px;">
-            <label style="display:block; font-weight:700; font-size:12px; margin-bottom:6px;">Artist (optional)</label>
-            <input id="yArtist" class="field" placeholder="Enter artist name" />
-          </div>
-          <div style="display:flex; gap:8px; justify-content:flex-end;">
-            <button id="yCancel" class="btn ghost">Cancel</button>
-            <button id="ySave" class="btn">Add Song</button>
+          <div class="setup-card" style="margin:0; padding:20px; text-align:center;">
+            <div style="font-size:20px; margin-bottom:12px;">Hi!</div>
+            <div style="font-weight:700; margin-bottom:8px;">This is still under development.</div>
+            <div style="font-size:14px; color:#666;">Hehe.</div>
           </div>
         `);
-
-        $("#yClose").onclick = closeModal;
-        $("#yCancel").onclick = closeModal;
-        $("#ySave").onclick = () => {
-          const url = $("#yUrl").value.trim();
-          if(!url){
-            alert("Please enter a YouTube URL");
-            return;
-          }
-          const name = $("#yName").value.trim();
-          const artist = $("#yArtist").value.trim();
-          if(!MusicPlayer) {
-            alert("Music player not initialized. Please refresh the page.");
-            return;
-          }
-          const index = MusicPlayer.addYouTube(url, name, artist);
-          if(index === null){
-            alert("Invalid YouTube URL. Please use a valid YouTube link.");
-            return;
-          }
-          closeModal();
-          if(MusicPlayer) MusicPlayer.play(index);
-          if(AudioSys && AudioSys.success) AudioSys.success();
-        };
+        $("#underDevClose").onclick = closeModal;
+      }
+      musicUploadBtn.onclick = () => {
+        showUnderDevelopmentModal();
+        if(AudioSys && AudioSys.click) AudioSys.click(440, 0.05, "triangle", 0.04);
+      };
+      musicYoutubeBtn.onclick = () => {
+        showUnderDevelopmentModal();
+        if(AudioSys && AudioSys.click) AudioSys.click(440, 0.05, "triangle", 0.04);
       };
       musicFileInput.addEventListener("change", (e) => {
         const file = e.target.files && e.target.files[0];
@@ -952,7 +1121,7 @@
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
             <div>
               <div style="font-weight:900; font-size:18px;">Upload MP3</div>
-              <div style="font-size:12px; color:#666;">Add your music file (Title_Artist)</div>
+              <div style="font-size:12px; color:#666;">Upload an MP3 file.</div>
             </div>
             <button id="mClose" class="btn ghost">Close</button>
           </div>
@@ -988,6 +1157,7 @@
         };
       });
       updateCollapsedIcon();
+      if(MusicPlayer && MusicPlayer.updateQueueUI) MusicPlayer.updateQueueUI();
     }
     if(document.readyState === 'loading'){
       document.addEventListener('DOMContentLoaded', wireUpControls);
